@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="bn">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0d1217">
+<title>Signal Desk</title>
+<style>
+:root{--bg:#0d1217;--panel:#151c24;--line:#25303b;--ink:#e8edf2;--dim:#8a98a6;--up:#34c796;--dn:#f0605d;--wait:#d9a441}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 system-ui,-apple-system,"Noto Sans Bengali",sans-serif;padding:env(safe-area-inset-top) 12px calc(env(safe-area-inset-bottom) + 16px)}
+header{display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between;padding:14px 0}
+h1{font-size:18px;margin:0}
+#st{font-size:13px;color:var(--dim)}
+#st i{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--dn);margin-right:6px}
+#st.on i{background:var(--up)}
+.tools{display:flex;gap:8px;align-items:center;font-size:13px;color:var(--dim)}
+input{width:90px;background:var(--panel);border:1px solid var(--line);color:var(--ink);border-radius:6px;padding:6px 8px;font-size:14px}
+button{background:var(--panel);border:1px solid var(--line);color:var(--ink);border-radius:6px;padding:7px 10px;font-size:13px}
+section{background:var(--panel);border-left:4px solid var(--line);border-radius:8px;padding:14px;margin-bottom:12px}
+section.long{border-color:var(--up)}section.short{border-color:var(--dn)}
+.top{display:flex;justify-content:space-between;align-items:baseline}
+.name{font-weight:600}.sym{color:var(--dim);font-size:12px;margin-left:6px}
+.price{font-size:26px;font-weight:700;font-variant-numeric:tabular-nums}
+.price.up{color:var(--up)}.price.dn{color:var(--dn)}
+.verdict{margin:8px 0;font-weight:600;font-size:17px}
+.long .verdict{color:var(--up)}.short .verdict{color:var(--dn)}.wait .verdict{color:var(--wait)}
+ul{list-style:none;margin:8px 0;padding:0;display:grid;grid-template-columns:1fr 1fr;gap:4px 14px}
+li{display:flex;justify-content:space-between;font-size:13px;border-bottom:1px solid var(--line);padding:3px 0}
+.b{color:var(--up)}.s{color:var(--dn)}.n{color:var(--dim)}
+.plan{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:10px}
+.plan div{background:var(--bg);border-radius:6px;padding:8px}
+.plan small{display:block;color:var(--dim);font-size:11px}
+.plan b{font-variant-numeric:tabular-nums;font-size:14px}
+.note{color:var(--dim);font-size:12px;margin-top:8px}
+</style>
+</head>
+<body>
+<header>
+  <h1>Signal Desk · 15m</h1>
+  <div id="st"><i></i><span>সংযোগ হচ্ছে…</span></div>
+  <div class="tools">
+    ব্যালেন্স $ <input id="bal" type="number" min="1" inputmode="decimal">
+    <button id="en">অ্যালার্ট চালু করুন</button>
+  </div>
+</header>
+<main id="main"></main>
+<p class="note">এটি শুধু সিগন্যাল দেয়, ট্রেড আপনি নিজে নেবেন। সিগন্যাল ক্যান্ডেল ক্লোজে নিশ্চিত হয়। লাভের নিশ্চয়তা নেই; আগে ব্যাকটেস্ট ও ডেমোতে যাচাই করুন।</p>
+<script>
+const PAIRS=[["BTCUSDT","বিটকয়েন"],["ETHUSDT","ইথেরিয়াম"],["PAXGUSDT","সোনা"]];
+const S={};let ctx=null,reconnect=false;
+const $=s=>document.querySelector(s);
+const fmt=v=>v>=1000?v.toFixed(2):v>=1?v.toFixed(3):v.toFixed(5);
+let bal=0;try{bal=+localStorage.getItem("bal")||1000}catch(e){bal=1000}
+$("#bal").value=bal;
+$("#bal").onchange=e=>{bal=Math.max(1,+e.target.value||1000);try{localStorage.setItem("bal",bal)}catch(x){}PAIRS.forEach(p=>render(p[0]))};
+
+PAIRS.forEach(([s,n])=>{const el=document.createElement("section");el.id="p-"+s;el.innerHTML=`<div class="top"><span><span class="name">${n}</span><span class="sym">${s}</span></span></div><div class="body n">লোড হচ্ছে…</div>`;$("#main").appendChild(el)});
+
+const ema=(a,p)=>{const k=2/(p+1),o=[a[0]];for(let i=1;i<a.length;i++)o.push(a[i]*k+o[i-1]*(1-k));return o};
+function atr(h,l,c,p){const o=[];let t=0;for(let i=0;i<c.length;i++){const tr=i?Math.max(h[i]-l[i],Math.abs(h[i]-c[i-1]),Math.abs(l[i]-c[i-1])):h[i]-l[i];if(i<p){t+=tr;o.push(t/(i+1))}else o.push((o[i-1]*(p-1)+tr)/p)}return o}
+function rsi(c,p){let g=0,ls=0;for(let i=1;i<=p;i++){const d=c[i]-c[i-1];d>0?g+=d:ls-=d}g/=p;ls/=p;for(let i=p+1;i<c.length;i++){const d=c[i]-c[i-1];g=(g*(p-1)+(d>0?d:0))/p;ls=(ls*(p-1)+(d<0?-d:0))/p}return ls===0?100:100-100/(1+g/ls)}
+function supertrend(h,l,c,a,m){let dir=1,fu=0,fl=0;for(let i=0;i<c.length;i++){const hl=(h[i]+l[i])/2,u=hl+m*a[i],lo=hl-m*a[i];if(i===0){fu=u;fl=lo}else{fu=(u<fu||c[i-1]>fu)?u:fu;fl=(lo>fl||c[i-1]<fl)?lo:fl;if(dir===1&&c[i]<fl)dir=-1;else if(dir===-1&&c[i]>fu)dir=1}}return dir}
+
+function analyze(K){
+  const c=K.map(x=>x.c),h=K.map(x=>x.h),l=K.map(x=>x.l),n=c.length-1,P=c[n];
+  const e9=ema(c,9)[n],e21=ema(c,21)[n],r=rsi(c,14);
+  const m12=ema(c,12),m26=ema(c,26),ml=m12.map((v,i)=>v-m26[i]),ms=ema(ml,9),hist=ml[n]-ms[n];
+  const a14=atr(h,l,c,14)[n],st=supertrend(h,l,c,atr(h,l,c,10),3);
+  const w=c.slice(-20),mid=w.reduce((x,y)=>x+y,0)/20,sd=Math.sqrt(w.reduce((x,y)=>x+(y-mid)**2,0)/20),up=mid+2*sd,lo=mid-2*sd;
+  const hi=[],lw=[];
+  for(let i=Math.max(5,n-150);i<n-5;i++){let H=true,L=true;for(let j=1;j<=5;j++){if(h[i]<=h[i-j]||h[i]<=h[i+j])H=false;if(l[i]>=l[i-j]||l[i]>=l[i+j])L=false}if(H)hi.push(h[i]);if(L)lw.push(l[i])}
+  const res=Math.min(...hi.filter(x=>x>P),Infinity),sup=Math.max(...lw.filter(x=>x<P),-Infinity);
+  const nearS=P-sup<0.5*a14,nearR=res-P<0.5*a14;
+  const votes=[
+    ["EMA 9/21",e9>e21?1:-1],
+    ["RSI "+r.toFixed(0),r>50&&r<70?1:r<50&&r>30?-1:0],
+    ["MACD",hist>0?1:-1],
+    ["Supertrend",st],
+    ["Bollinger",P>mid&&P<up?1:P<mid&&P>lo?-1:0],
+    ["সাপোর্ট/রেজিস্ট্যান্স",nearS?1:nearR?-1:0]
+  ];
+  const bull=votes.filter(v=>v[1]>0).length,bear=votes.filter(v=>v[1]<0).length;
+  const side=bull>=3&&bull>=bear+2?"LONG":bear>=3&&bear>=bull+2?"SHORT":null;
+  let plan=null;
+  if(side){const d=side==="LONG"?1:-1,risk=1.5*a14,trend=st===d&&Math.abs(e9-e21)>0.5*a14,rr=trend?2.5:2;
+    const sl=P-d*risk,tp=P+d*risk*rr,qty=(bal*0.01)/risk;plan={entry:P,sl,tp,rr,qty,usd:qty*P,trend}}
+  return{P,votes,bull,bear,side,plan,t:K[n].t,sup,res};
+}
+
+async function load(s){
+  try{
+    const r=await fetch(`https://api.binance.com/api/v3/klines?symbol=${s}&interval=15m&limit=500`);
+    const d=await r.json();if(!Array.isArray(d))throw 0;
+    const all=d.map(x=>({t:x[0],o:+x[1],h:+x[2],l:+x[3],c:+x[4]}));
+    const K=all.slice(0,-1),a=analyze(K);
+    S[s]={K,live:all[all.length-1].c,prev:null,a,side:a.side};
+  }catch(e){if(!S[s]||S[s].err)S[s]={err:1}}
+  render(s);
+}
+
+function render(s){
+  const o=S[s],el=$("#p-"+s),body=el.querySelector(".top").nextElementSibling;
+  if(!o||o.err){body.textContent="ডেটা আনা যায়নি। ইন্টারনেট ও Binance অ্যাক্সেস দেখুন।";return}
+  const a=o.a,dirc=o.prev==null?"":o.live>=o.prev?"up":"dn";
+  el.className=a.side?a.side.toLowerCase():"wait";
+  const txt=a.side==="LONG"?"কেনার সুযোগ (LONG)":a.side==="SHORT"?"বিক্রির সুযোগ (SHORT)":"এখন ট্রেড নেবেন না";
+  const lis=a.votes.map(v=>`<li><span>${v[0]}</span><span class="${v[1]>0?"b":v[1]<0?"s":"n"}">${v[1]>0?"বুলিশ":v[1]<0?"বিয়ারিশ":"নিরপেক্ষ"}</span></li>`).join("");
+  const p=a.plan,plan=p?`<div class="plan"><div><small>Entry</small><b>${fmt(p.entry)}</b></div><div><small>Stop Loss</small><b>${fmt(p.sl)}</b></div><div><small>Take Profit (1:${p.rr})</small><b>${fmt(p.tp)}</b></div><div><small>পরিমাণ</small><b>${p.qty.toFixed(p.qty<1?5:2)}</b></div><div><small>সাইজ (USDT)</small><b>${p.usd.toFixed(2)}</b></div><div><small>ঝুঁকি (1%)</small><b>$${(bal*0.01).toFixed(2)}</b></div></div><div class="note">${p.trend?"ট্রেন্ডিং মার্কেট, তাই 1:2.5":"সাইডওয়েজ/দুর্বল ট্রেন্ড, তাই 1:2"}। Entry = ক্যান্ডেল ক্লোজ প্রাইস; এখনকার দাম অনেক সরে গেলে ট্রেড নেবেন না।</div>`:"";
+  const tm=new Date(a.t+15*60000).toLocaleTimeString("bn-BD",{hour:"2-digit",minute:"2-digit"});
+  el.querySelector(".top").innerHTML=el.querySelector(".top").firstElementChild.outerHTML+`<span class="price ${dirc}">${fmt(o.live)}</span>`;
+  body.className="body";
+  body.innerHTML=`<div class="verdict">${txt}</div><ul>${lis}</ul>${plan}<div class="note">বুলিশ ${a.bull} · বিয়ারিশ ${a.bear} · শেষ ক্লোজ ${tm}</div>`;
+}
+
+function beep(){if(!ctx)return;try{const os=ctx.createOscillator(),g=ctx.createGain();os.connect(g);g.connect(ctx.destination);os.frequency.value=880;g.gain.value=0.2;os.start();os.stop(ctx.currentTime+0.4)}catch(e){}}
+function alertUser(s,a){
+  const n=PAIRS.find(p=>p[0]===s)[1],msg=`${n}: ${a.side==="LONG"?"কেনার":"বিক্রির"} সিগন্যাল (${Math.max(a.bull,a.bear)} ইন্ডিকেটর একমত)`;
+  if(navigator.vibrate)navigator.vibrate([200,100,200]);beep();
+  try{if("Notification"in window&&Notification.permission==="granted")new Notification("Signal Desk",{body:msg})}catch(e){}
+}
+$("#en").onclick=()=>{try{ctx=ctx||new(window.AudioContext||window.webkitAudioContext)()}catch(e){}
+  try{if("Notification"in window)Notification.requestPermission()}catch(e){}
+  $("#en").textContent="অ্যালার্ট চালু ✓";beep()};
+
+function setStatus(on){const e=$("#st");e.className=on?"on":"";e.querySelector("span").textContent=on?"লাইভ সংযুক্ত":"সংযোগ বিচ্ছিন্ন, আবার চেষ্টা হচ্ছে…"}
+function connect(){
+  const ws=new WebSocket("wss://stream.binance.com:9443/stream?streams="+PAIRS.map(p=>p[0].toLowerCase()+"@kline_15m").join("/"));
+  ws.onopen=()=>{setStatus(true);if(reconnect)PAIRS.forEach(p=>load(p[0]))};
+  ws.onclose=()=>{setStatus(false);reconnect=true;setTimeout(connect,3000)};
+  ws.onerror=()=>ws.close();
+  ws.onmessage=e=>{
+    const k=JSON.parse(e.data).data.k,s=k.s,o=S[s];if(!o||o.err)return;
+    o.prev=o.live;o.live=+k.c;
+    if(k.x){const last=o.K[o.K.length-1];
+      if(!last||k.t>last.t){o.K.push({t:k.t,o:+k.o,h:+k.h,l:+k.l,c:+k.c});if(o.K.length>600)o.K.shift();
+        o.a=analyze(o.K);if(o.a.side&&o.a.side!==o.side)alertUser(s,o.a);o.side=o.a.side}}
+    render(s);
+  };
+}
+Promise.all(PAIRS.map(p=>load(p[0]))).then(connect);
+</script>
+</body>
+</html>
