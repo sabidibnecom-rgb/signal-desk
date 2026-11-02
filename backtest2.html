@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="bn"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Signal Desk ব্যাকটেস্ট</title>
+<style>
+:root{--bg:#0c1117;--pn:#141c26;--ln:#223042;--tx:#dfe7ef;--mu:#7f90a3;--up:#2dd4a7;--dn:#ff6b5e;--wt:#e8b04a;color-scheme:dark}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--tx);font:15px/1.45 system-ui,-apple-system,"Noto Sans Bengali",sans-serif}
+body{padding:calc(env(safe-area-inset-top,0px) + 14px) 12px calc(env(safe-area-inset-bottom,0px) + 40px);max-width:560px;margin:auto;font-variant-numeric:tabular-nums}
+h1{font-size:20px;margin:0 0 10px}
+.bar{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px}
+select,button{background:var(--pn);color:var(--tx);border:1px solid var(--ln);border-radius:8px;padding:10px;font:inherit;width:100%}
+#go{grid-column:1/3;background:var(--up);color:#06231b;font-weight:700;border:0}
+#go:disabled{opacity:.5}
+#st{color:var(--mu);font-size:13.5px;margin:6px 0 12px;min-height:20px}
+.card{background:var(--pn);border:1px solid var(--ln);border-radius:10px;margin-bottom:12px;padding:12px 14px}
+.card.best{border-color:var(--up)}
+.card h3{margin:0 0 6px;font-size:15.5px}
+.row{display:flex;justify-content:space-between;gap:10px;padding:3px 0;border-top:1px solid var(--ln);font-size:13.5px}
+.row:first-of-type{border:0}.row span:first-child{color:var(--mu)}
+.p{color:var(--up)}.m{color:var(--dn)}
+.sum{background:#10222b;border:1px solid var(--ln);border-radius:10px;padding:12px 14px;margin-bottom:12px}
+.foot{color:var(--mu);font-size:12.5px}
+</style></head><body>
+<h1>Signal Desk ব্যাকটেস্ট</h1>
+<div class="bar">
+<select id="sy"><option value="ALL">সব ৩টা</option><option value="BTCUSDT">BTC</option><option value="ETHUSDT">ETH</option><option value="PAXGUSDT">XAU (PAXG)</option></select>
+<select id="tf"><option value="15m">15m</option><option value="5m">5m</option></select>
+<select id="pd" style="grid-column:1/3"><option value="90">গত ৩ মাস</option><option value="180" selected>গত ৬ মাস</option><option value="365">গত ১ বছর</option><option value="730">গত ২ বছর</option><option value="1095">গত ৩ বছর (অনেক সময় লাগবে)</option></select>
+<button id="go">ব্যাকটেস্ট চালাও</button>
+</div>
+<div id="st">সময় বেছে বাটন চাপো। ডেটা Binance থেকে আসবে, পেজ খোলা রাখো।</div>
+<div id="out"></div>
+<p class="foot">R মানে ঝুঁকির এক ভাগ (তোমার ১%)। +১R মানে ঝুঁকির সমান লাভ। খরচ ধরা আছে: ক্রয়-বিক্রয় মিলিয়ে ০.২%। একই ক্যান্ডেলে SL আর টার্গেট দুটোই ছুঁলে SL ধরা হয়েছে। এক সময়ে একটাই ট্রেড, সর্বোচ্চ ২০০ ক্যান্ডেল ধরে রাখা। অতীতের ফল ভবিষ্যতের গ্যারান্টি নয়।</p>
+<script>
+const BASES=['https://api.binance.com','https://data-api.binance.vision'];
+async function jget(p){for(const b of BASES){try{const r=await fetch(b+p);if(r.ok)return await r.json()}catch(e){}}throw new Error('net')}
+const ema=(a,n)=>{const k=2/(n+1);let e=a[0];return a.map((v,i)=>i?(e=v*k+e*(1-k)):e)};
+function rsi(c,n=14){const r=Array(c.length).fill(50);let g=0,l=0;for(let i=1;i<=n;i++){const d=c[i]-c[i-1];d>0?g+=d:l-=d}g/=n;l/=n;r[n]=100-100/(1+g/(l||1e-9));for(let i=n+1;i<c.length;i++){const d=c[i]-c[i-1];g=(g*(n-1)+(d>0?d:0))/n;l=(l*(n-1)+(d<0?-d:0))/n;r[i]=100-100/(1+g/(l||1e-9))}return r}
+const atr=(k,n=14)=>ema(k.map((x,i)=>i?Math.max(x.h-x.l,Math.abs(x.h-k[i-1].c),Math.abs(x.l-k[i-1].c)):x.h-x.l),n);
+function vprof(s){const mn=Math.min(...s.map(x=>x.l)),mx=Math.max(...s.map(x=>x.h)),B=24,b=Array(B).fill(0),st=(mx-mn)/B||1;s.forEach(x=>{b[Math.min(B-1,Math.floor(((x.h+x.l+x.c)/3-mn)/st))]+=x.v});return mn+st*(b.indexOf(Math.max(...b))+.5)}
+function pat(k,i){const x=k[i],p=k[i-1],bd=Math.abs(x.c-x.o),rg=x.h-x.l||1e-9,up=x.h-Math.max(x.o,x.c),dn=Math.min(x.o,x.c)-x.l,pb=Math.abs(p.c-p.o),bu=[],be=[];
+if(x.c>x.o&&p.c<p.o&&x.c>=p.o&&x.o<=p.c&&bd>pb)bu.push(1);
+if(x.c<x.o&&p.c>p.o&&x.c<=p.o&&x.o>=p.c&&bd>pb)be.push(1);
+if(bd>0&&dn>=2*bd&&up<=.3*rg)bu.push(1);
+if(bd>0&&up>=2*bd&&dn<=.3*rg)be.push(1);
+if(bd/rg>=.65){x.c>x.o?bu.push(1):be.push(1)}
+return{bu,be}}
+function bbw(c,i){const s=c.slice(i-19,i+1),m=s.reduce((a,b)=>a+b)/20,sd=Math.sqrt(s.reduce((a,b)=>a+(b-m)**2,0)/20);return{m,w:4*sd/m}}
+const lb=(P,v)=>{let lo=0,hi=P.length;while(lo<hi){const m=(lo+hi)>>1;P[m][0]<v?lo=m+1:hi=m}return lo};
+
+function sim(k,i,S,en,sl,r,T){const n=k.length,tp=S?en+T*r:en-T*r,e=Math.min(n-1,i+200);for(let j=i+1;j<=e;j++){const x=k[j],hs=S?x.l<=sl:x.h>=sl,ht=S?x.h>=tp:x.l<=tp;if(hs)return[-1,j];if(ht)return[T,j]}return[(S?k[e].c-en:en-k[e].c)/r,e]}
+
+function cands(k){
+const n=k.length,c=k.map(x=>x.c),e9=ema(c,9),e21=ema(c,21),R=rsi(c),A=atr(k),e12=ema(c,12),e26=ema(c,26),m=e12.map((v,i)=>v-e26[i]),sg=ema(m,9),hist=m.map((v,i)=>v-sg[i]);
+const bm=[],bw=[];for(let i=0;i<n;i++){if(i<19){bm.push(c[i]);bw.push(9)}else{const b=bbw(c,i);bm.push(b.m);bw.push(b.w)}}
+const HM=3.6e6,hb=[],hmap={};k.forEach(x=>{const b=Math.floor(x.t/HM)*HM;if(hmap[b]===undefined){hmap[b]=hb.length;hb.push(x.c)}else hb[hmap[b]]=x.c});
+const h20=ema(hb,20),h50=ema(hb,50),h100=ema(hb,100),tr=hb.map((_,j)=>j<100?null:h20[j]>h50[j]&&h50[j]>h100[j]?'B':h20[j]<h50[j]&&h50[j]<h100[j]?'S':null);
+const hiP=[],loP=[];for(let j=5;j<n-5;j++){let H=1,Lw=1;for(let q=j-5;q<=j+5;q++){if(k[q].h>k[j].h)H=0;if(k[q].l<k[j].l)Lw=0}if(H)hiP.push([j,k[j].h]);if(Lw)loP.push([j,k[j].l])}
+const out=[];
+for(let i=130;i<n-1;i++){
+let ci=-1,sd=0;for(let q=i-1;q>=i-7;q--){if(e9[q-1]<=e21[q-1]&&e9[q]>e21[q]){ci=q;sd=1;break}if(e9[q-1]>=e21[q-1]&&e9[q]<e21[q]){ci=q;sd=-1;break}}
+if(ci<0)continue;const S=sd==1,ch=k[ci].h,cl=k[ci].l;
+if(S?e9[i]<=e21[i]:e9[i]>=e21[i])continue;
+if(!(S?c[i]>ch:c[i]<cl))continue;
+let early=false;for(let q=ci+1;q<i;q++){if(S?c[q]>ch:c[q]<cl){early=true;break}}if(early)continue;
+const a=A[i],w0=Math.max(0,ci-2);let rz=S?1e9:-1e9,ext=S?1e18:-1e18;
+for(let q=w0;q<=i;q++){if(S){rz=Math.min(rz,R[q]);ext=Math.min(ext,k[q].l)}else{rz=Math.max(rz,R[q]);ext=Math.max(ext,k[q].h)}}
+const rOK=S?rz<=40:rz>=70;let rz2=S?1e9:-1e9;for(let q=Math.max(0,i-12);q<=i;q++){rz2=S?Math.min(rz2,R[q]):Math.max(rz2,R[q])}const rOK2=S?rz2<=40:rz2>=70;
+const P=S?loP:hiP;let sr=false;for(let q=lb(P,i-500);q<P.length&&P[q][0]<=i-5;q++){if(Math.abs(P[q][1]-ext)<=a){sr=true;break}}
+let av=0;for(let q=i-20;q<i;q++)av+=k[q].v;av/=20;const poc=vprof(k.slice(Math.max(0,i-99),i+1));
+const vOK=k[i].v>av&&(S?c[i]>poc:c[i]<poc);
+const p1=pat(k,i),p2=pat(k,i-1),pOK=(S?p1.bu.length+p2.bu.length:p1.be.length+p2.be.length)>0;
+const mOK=S?hist[i]>0&&hist[i]>=hist[i-1]:hist[i]<0&&hist[i]<=hist[i-1];
+let mn6=1e9,mn120=1e9;for(let q=i-120;q<=i;q++){mn120=Math.min(mn120,bw[q]);if(q>i-6)mn6=Math.min(mn6,bw[q])}
+const sOK=mn6<=mn120*1.15&&(S?c[i]>bm[i]:c[i]<bm[i]);
+const hi=hmap[Math.floor(k[i].t/HM)*HM],trd=hi>0?tr[hi-1]:null,tOK=trd==(S?'B':'S'),opp=!!trd&&!tOK;
+const en=c[i],sl=S?cl-.1*a:ch+.1*a,r=Math.abs(en-sl);if(!(r>0))continue;
+out.push({t:k[i].t,i,rOK,rOK2,sr,vOK,pOK,tOK,opp,ex:(tOK?1:0)+(mOK?1:0)+(sOK?1:0),rk:r<=3*a,cost:.002*en/r,a:sim(k,i,S,en,sl,r,2),b:sim(k,i,S,en,sl,r,2.5)})}
+return out}
+
+const VARS=[
+['পুরো নিয়ম (অ্যাপে এখন যেমন আছে)',c=>c.rOK&&c.sr&&c.vOK&&c.pOK&&!c.opp&&c.rk&&c.ex>=1],
+['RSI জোন গত ১২ ক্যান্ডেলের মধ্যে ছুঁলেই চলবে (বাকি সব সহ)',c=>c.rOK2&&c.sr&&c.vOK&&c.pOK&&!c.opp&&c.rk&&c.ex>=1],
+['RSI জোনের শর্ত ছাড়া',c=>c.sr&&c.vOK&&c.pOK&&!c.opp&&c.rk&&c.ex>=1],
+['সাপোর্ট/রেজিস্ট্যান্স ছাড়া',c=>c.rOK&&c.vOK&&c.pOK&&!c.opp&&c.rk&&c.ex>=1],
+['ভলিউম ছাড়া',c=>c.rOK&&c.sr&&c.pOK&&!c.opp&&c.rk&&c.ex>=1],
+['ক্যান্ডেল প্যাটার্ন ছাড়া',c=>c.rOK&&c.sr&&c.vOK&&!c.opp&&c.rk&&c.ex>=1],
+['1H ট্রেন্ড মিলতেই হবে (বাকি সব সহ)',c=>c.rOK&&c.sr&&c.vOK&&c.pOK&&c.tOK&&c.rk],
+['অতিরিক্ত কনফার্মেশন ২টা লাগবে',c=>c.rOK&&c.sr&&c.vOK&&c.pOK&&!c.opp&&c.rk&&c.ex>=2],
+['শুধু EMA ক্রস + ব্রেকআউট (কোনো ফিল্টার নেই)',c=>c.rk]];
+function run(cs,pred,key){let last=-1;const o=[];for(const c of cs){if(c.i<=last||!pred(c))continue;const r=c[key];o.push({t:c.t,R:r[0]-c.cost});last=r[1]}return o}
+function st(tr){tr=tr.slice().sort((x,y)=>x.t-y.t);let s=0,p=0,ng=0,w=0,pk=0,dd=0;for(const x of tr){s+=x.R;if(x.R>0){w++;p+=x.R}else ng-=x.R;pk=Math.max(pk,s);dd=Math.min(dd,s-pk)}const n=tr.length;return{n,w:n?w/n*100:0,tot:s,avg:n?s/n:0,pf:ng?p/ng:(p?99:0),dd}}
+const sg=v=>(v>=0?'+':'')+v.toFixed(2);const cl=v=>v>0?'p':v<0?'m':'';
+const $=id=>document.getElementById(id);
+
+async function hist(sym,iv,days,cb){const end0=Date.now(),start=end0-days*864e5;let end=end0,all=[];
+while(end>start){const d=await jget(`/api/v3/klines?symbol=${sym}&interval=${iv}&limit=1000&endTime=${end}`);if(!d.length)break;all=d.concat(all);end=d[0][0]-1;cb(all.length);await new Promise(r=>setTimeout(r,70))}
+return all.filter(x=>x[0]>=start).slice(0,-1).map(x=>({t:x[0],o:+x[1],h:+x[2],l:+x[3],c:+x[4],v:+x[5]}))}
+
+$('go').onclick=async()=>{const b=$('go');b.disabled=true;$('out').innerHTML='';
+const syms=$('sy').value=='ALL'?['BTCUSDT','ETHUSDT','PAXGUSDT']:[$('sy').value],iv=$('tf').value,days=+$('pd').value;
+const agg=VARS.map(()=>({a:[],b:[]}));let tmin=1e18,tmax=0,cnt=0;
+try{for(const s of syms){const k=await hist(s,iv,days,n=>$('st').textContent=s.replace('USDT','')+' ডেটা নামছে: '+n+' ক্যান্ডেল');
+if(k.length<400)throw new Error('ডেটা কম');tmin=Math.min(tmin,k[0].t);tmax=Math.max(tmax,k[k.length-1].t);
+$('st').textContent=s.replace('USDT','')+' হিসাব চলছে…';await new Promise(r=>setTimeout(r,30));
+const cs=cands(k);cnt+=cs.length;VARS.forEach((v,j)=>{agg[j].a.push(...run(cs,v[1],'a'));agg[j].b.push(...run(cs,v[1],'b'))})}
+const mid=(tmin+tmax)/2,res=VARS.map((v,j)=>({name:v[0],a:st(agg[j].a),b:st(agg[j].b),h1:st(agg[j].a.filter(x=>x.t<mid)),h2:st(agg[j].a.filter(x=>x.t>=mid))}));
+let bi=-1;res.forEach((r,j)=>{if(r.a.n>=20&&(bi<0||r.a.avg>res[bi].a.avg))bi=j});
+const full=res[0],bare=res[res.length-1];
+let sum='<div class="sum"><b>সারসংক্ষেপ</b><br>';
+if(full.a.n<20)sum+=`পুরো নিয়মে মাত্র ${full.a.n}টা ট্রেড হয়েছে, এত কম ট্রেডে ফল বিশ্বাসযোগ্য নয়। বেশি সময় বা সব ৩ পেয়ার বেছে আবার চালাও।`;
+else sum+=`পুরো নিয়মে ${full.a.n}টা ট্রেড, ১:২ টার্গেটে জেতার হার ${full.a.w.toFixed(0)}%, ট্রেড প্রতি গড় <span class="${cl(full.a.avg)}">${sg(full.a.avg)}R</span>। ফিল্টার ছাড়া ক্রসে গড় <span class="${cl(bare.a.avg)}">${sg(bare.a.avg)}R</span>। ${full.a.avg>0?'খরচ ধরেও এই সময়ে লাভ দেখাচ্ছে।':'খরচ ধরলে এই সময়ে লাভ দেখাচ্ছে না।'}`;
+sum+=`<br><span class="foot">মোট ${cnt}টা ক্রস+ব্রেকআউট সেটআপ পাওয়া গেছে। জেতার হার ৩৫% এর কম হলে ১:২ টার্গেটে লাভ কঠিন। ৩০টার কম ট্রেডের ফলকে ভরসা কোরো না। আর ৮টা ভ্যারিয়েন্ট থেকে সেরাটা বাছলে সেটা কাকতালীয়ও হতে পারে, তাই দুই অর্ধেকে মিলিয়ে দেখো।</span></div>`;
+$('out').innerHTML=sum+res.map((r,j)=>`<div class="card ${j==bi?'best':''}"><h3>${r.name}${j==bi?' (সেরা গড়)':''}</h3>
+<div class="row"><span>ট্রেড / জেতার হার (১:২)</span><span>${r.a.n} / ${r.a.w.toFixed(0)}%</span></div>
+<div class="row"><span>১:২ → গড় R / মোট R</span><span class="${cl(r.a.avg)}">${sg(r.a.avg)} / ${sg(r.a.tot)}</span></div>
+<div class="row"><span>১:২.৫ → জেতার হার / গড় R / মোট R</span><span class="${cl(r.b.avg)}">${r.b.w.toFixed(0)}% / ${sg(r.b.avg)} / ${sg(r.b.tot)}</span></div>
+<div class="row"><span>প্রফিট ফ্যাক্টর (১:২) / সর্বোচ্চ পতন</span><span>${r.a.pf.toFixed(2)} / ${r.a.dd.toFixed(1)}R</span></div>
+<div class="row"><span>পুরোনো অর্ধেক / নতুন অর্ধেকে গড় R</span><span><span class="${cl(r.h1.avg)}">${r.h1.n?sg(r.h1.avg):'-'}</span> / <span class="${cl(r.h2.avg)}">${r.h2.n?sg(r.h2.avg):'-'}</span></span></div></div>`).join('');
+$('st').textContent='শেষ। উপরে সারসংক্ষেপ, নিচে প্রতিটা নিয়মের ফল।'}
+catch(e){$('st').textContent='সমস্যা হয়েছে: '+(e.message||e)+'. ইন্টারনেট দেখে আবার চেষ্টা করো বা কম সময় বাছো।'}
+b.disabled=false};
+</script></body></html>
