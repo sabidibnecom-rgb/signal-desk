@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="bn"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Signal Desk v2</title>
+<style>
+:root{--bg:#0c1117;--pn:#141c26;--ln:#223042;--tx:#dfe7ef;--mu:#7f90a3;--up:#2dd4a7;--dn:#ff6b5e;--wt:#e8b04a;color-scheme:dark}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--tx);font:15px/1.45 system-ui,-apple-system,"Noto Sans Bengali",sans-serif}
+body{padding:calc(env(safe-area-inset-top,0px) + 14px) 12px calc(env(safe-area-inset-bottom,0px) + 40px);max-width:560px;margin:auto;font-variant-numeric:tabular-nums}
+h1{font-size:20px;margin:0 0 10px}h1 small{color:var(--mu);font-weight:400;font-size:13px;margin-left:6px}
+.bar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px}
+.bar button,.bar input{background:var(--pn);color:var(--tx);border:1px solid var(--ln);border-radius:8px;padding:8px 11px;font:inherit}
+.bar input{width:96px}.bar .on{border-color:var(--up);color:var(--up)}
+#toast{display:none;background:var(--up);color:#06231b;padding:10px 12px;border-radius:8px;margin-bottom:10px;font-weight:600}
+.card{background:var(--pn);border:1px solid var(--ln);border-radius:10px;margin-bottom:14px;overflow:hidden}
+.top{display:flex;justify-content:space-between;align-items:baseline;padding:12px 14px 8px}
+.top b{font-size:17px}.px{font-size:22px;font-weight:650}
+.vd{padding:11px 14px;font-weight:700;font-size:17px;border-left:6px solid var(--mu)}
+.vd small{display:block;font-weight:400;color:var(--mu);font-size:13px;margin-top:2px}
+.TAKE.BUY{border-color:var(--up);background:#10302a}.TAKE.SELL{border-color:var(--dn);background:#341a19}.WAIT{border-color:var(--wt)}
+ul{list-style:none;margin:0;padding:6px 14px 4px}
+li{display:flex;gap:8px;padding:5px 0;border-bottom:1px solid var(--ln)}li:last-child{border:0}
+li b{width:18px;flex:none}li.y b{color:var(--up)}li.n b{color:var(--dn)}li.i b{color:var(--mu)}
+li small{display:block;color:var(--mu);font-size:12.5px}
+.plan{display:grid;grid-template-columns:1fr 1fr;gap:6px 14px;padding:10px 14px 14px;border-top:1px solid var(--ln)}
+.plan div{font-size:13px;color:var(--mu)}.plan span{display:block;color:var(--tx);font-size:15px;font-weight:600}
+.foot{color:var(--mu);font-size:12.5px}
+</style></head><body>
+<h1>Signal Desk<small>v2 · কম্বাইন্ড ইঞ্জিন</small></h1>
+<div class="bar">
+<button data-t="5m">5m</button><button data-t="15m" class="on">15m</button>
+<input id="bal" type="number" inputmode="decimal" value="1000" aria-label="ব্যালান্স (USD)">
+<button id="snd">অ্যালার্ট চালু করো</button>
+</div>
+<div id="toast"></div>
+<main id="cards"></main>
+<p class="foot">এটা সিদ্ধান্তে সাহায্য করার টুল। লাভের গ্যারান্টি নেই। আসল টাকা দেওয়ার আগে ডেমোতে মিলিয়ে দেখো। সিগন্যাল শুধু বন্ধ হয়ে যাওয়া ক্যান্ডেল থেকে আসে।</p>
+<script>
+const SYMS=[['BTCUSDT','BTC/USD'],['ETHUSDT','ETH/USD'],['PAXGUSDT','XAU/USD (PAXG)']];
+const BASES=['https://api.binance.com','https://data-api.binance.vision'];
+const MIN_EXTRA=1; // 1H ট্রেন্ড, MACD, স্কুইজ: কমপক্ষে কয়টা মিলতে হবে
+let tf='15m',bal=1000,sound=false,D={},prices={},seen={},actx;
+try{tf=localStorage.getItem('tf')||tf;bal=+localStorage.getItem('bal')||bal}catch(e){}
+async function jget(p){for(const b of BASES){try{const r=await fetch(b+p);if(r.ok)return await r.json()}catch(e){}}throw new Error('net')}
+const ema=(a,n)=>{const k=2/(n+1);let e=a[0];return a.map((v,i)=>i?(e=v*k+e*(1-k)):e)};
+function rsi(c,n=14){const r=Array(c.length).fill(50);let g=0,l=0;for(let i=1;i<=n;i++){const d=c[i]-c[i-1];d>0?g+=d:l-=d}g/=n;l/=n;r[n]=100-100/(1+g/(l||1e-9));for(let i=n+1;i<c.length;i++){const d=c[i]-c[i-1];g=(g*(n-1)+(d>0?d:0))/n;l=(l*(n-1)+(d<0?-d:0))/n;r[i]=100-100/(1+g/(l||1e-9))}return r}
+const atr=(k,n=14)=>ema(k.map((x,i)=>i?Math.max(x.h-x.l,Math.abs(x.h-k[i-1].c),Math.abs(x.l-k[i-1].c)):x.h-x.l),n);
+function pivots(k,w=5){const hi=[],lo=[];for(let i=w;i<k.length-w;i++){let H=1,L=1;for(let j=i-w;j<=i+w;j++){if(k[j].h>k[i].h)H=0;if(k[j].l<k[i].l)L=0}if(H)hi.push(k[i].h);if(L)lo.push(k[i].l)}return{hi,lo}}
+function vprof(k){const s=k.slice(-100),mn=Math.min(...s.map(x=>x.l)),mx=Math.max(...s.map(x=>x.h)),B=24,b=Array(B).fill(0),st=(mx-mn)/B||1;s.forEach(x=>{b[Math.min(B-1,Math.floor(((x.h+x.l+x.c)/3-mn)/st))]+=x.v});return mn+st*(b.indexOf(Math.max(...b))+.5)}
+function pat(k,i){const x=k[i],p=k[i-1],bd=Math.abs(x.c-x.o),rg=x.h-x.l||1e-9,up=x.h-Math.max(x.o,x.c),dn=Math.min(x.o,x.c)-x.l,pb=Math.abs(p.c-p.o),bu=[],be=[];
+if(x.c>x.o&&p.c<p.o&&x.c>=p.o&&x.o<=p.c&&bd>pb)bu.push('Bullish Engulfing');
+if(x.c<x.o&&p.c>p.o&&x.c<=p.o&&x.o>=p.c&&bd>pb)be.push('Bearish Engulfing');
+if(bd>0&&dn>=2*bd&&up<=.3*rg)bu.push('Hammer/Pin Bar');
+if(bd>0&&up>=2*bd&&dn<=.3*rg)be.push('Shooting Star');
+if(bd/rg>=.65){x.c>x.o?bu.push('Strong Bull Candle'):be.push('Strong Bear Candle')}
+return{bu,be}}
+function bbw(c,i){const s=c.slice(i-19,i+1),m=s.reduce((a,b)=>a+b)/20,sd=Math.sqrt(s.reduce((a,b)=>a+(b-m)**2,0)/20);return{m,w:4*sd/m}}
+const f=v=>v.toLocaleString('en',{maximumFractionDigits:v>100?2:4});
+const chk=(ok,t,d)=>({ok,t,d});
+
+function analyze(K,H,px){
+const k=K.slice(0,-1),n=k.length,L=n-1,c=k.map(x=>x.c),e9=ema(c,9),e21=ema(c,21),R=rsi(c),A=atr(k),a=A[L];
+const hc=H.slice(0,-1).map(x=>x.c),h20=ema(hc,20),h50=ema(hc,50),h100=ema(hc,100),hl=hc.length-1;
+const tr=h20[hl]>h50[hl]&&h50[hl]>h100[hl]?'BUY':h20[hl]<h50[hl]&&h50[hl]<h100[hl]?'SELL':null;
+const o={v:'SKIP',side:null,msg:'কোনো সাম্প্রতিক EMA 9/21 ক্রস নেই',rows:[],plan:null,key:''};
+let ci=-1,side=null;
+for(let i=L;i>L-8&&i>1;i--){if(e9[i-1]<=e21[i-1]&&e9[i]>e21[i]){ci=i;side='BUY';break}if(e9[i-1]>=e21[i-1]&&e9[i]<e21[i]){ci=i;side='SELL';break}}
+if(ci>=0&&(side=='BUY'?e9[L]<=e21[L]:e9[L]>=e21[L]))ci=-1;
+o.rows.push(chk(!!(ci>=0),'EMA 9/21 ক্রস',ci>=0?side+' ক্রস, '+(L-ci)+' ক্যান্ডেল আগে':'নেই'));
+o.rows.push(chk(!!(tr),'1H EMA 20/50/100 ট্রেন্ড',tr?(tr=='BUY'?'আপট্রেন্ড (20>50>100)':'ডাউনট্রেন্ড (20<50<100)'):'পরিষ্কার ট্রেন্ড নেই'));
+if(ci<0)return o;
+o.side=side;const S=side=='BUY',ch=k[ci].h,cl=k[ci].l;
+let bo=-1;for(let i=ci+1;i<=L;i++){if(S?c[i]>ch:c[i]<cl){bo=i;break}}
+if(bo<0){o.v='WAIT';o.msg=S?'ব্রেকআউটের অপেক্ষা: '+f(ch)+' এর উপরে ক্লোজ লাগবে':'ব্রেকআউটের অপেক্ষা: '+f(cl)+' এর নিচে ক্লোজ লাগবে';
+o.rows.push(chk(false,'ব্রেকআউট ক্যান্ডেল ক্লোজ','এখনো হয়নি'));return o}
+if(bo<L-1){o.msg='এন্ট্রির সময় পার হয়ে গেছে (ব্রেকআউট '+(L-bo)+' ক্যান্ডেল আগে)';o.rows.push(chk(false,'ব্রেকআউট',' পুরোনো'));return o}
+const w0=Math.max(0,ci-2),win=R.slice(w0,bo+1),lows=k.slice(w0,bo+1).map(x=>x.l),highs=k.slice(w0,bo+1).map(x=>x.h);
+const rz=S?Math.min(...win):Math.max(...win),rOK=S?rz<=40:rz>=70;
+const pv=pivots(k.slice(0,bo+1)),ext=S?Math.min(...lows):Math.max(...highs),lv=(S?pv.lo:pv.hi).filter(p=>Math.abs(p-ext)<=a);
+const av=k.slice(bo-20,bo).reduce((s,x)=>s+x.v,0)/20,poc=vprof(k.slice(0,bo+1)),vA=k[bo].v>av,vP=S?c[bo]>poc:c[bo]<poc;
+const pa=[pat(k,bo),pat(k,bo-1)],pn=[...new Set(pa.flatMap(p=>S?p.bu:p.be))];
+const e26=ema(c,26),m=ema(c,12).map((v,i)=>v-e26[i]),sg=ema(m,9),hist=m.map((v,i)=>v-sg[i]),mOK=S?hist[L]>0&&hist[L]>=hist[L-1]:hist[L]<0&&hist[L]<=hist[L-1];
+const ws=[];for(let i=L-120;i<=L;i++)ws.push(bbw(c,i).w);const sq=Math.min(...ws.slice(-6))<=Math.min(...ws)*1.15,bm=bbw(c,L).m,sOK=sq&&(S?c[L]>bm:c[L]<bm);
+const tOK=tr==side,opp=tr&&tr!=side;
+o.rows.push(chk(true,'ব্রেকআউট ক্যান্ডেল ক্লোজ',(S?'high ':'low ')+f(S?ch:cl)+' ভেঙে ক্লোজ '+f(c[bo])));
+o.rows.push(chk(rOK,'RSI '+(S?'oversold (≤40)':'overbought (≥70)'),'ক্রসের সময় RSI '+rz.toFixed(1)));
+o.rows.push(chk(lv.length>0,S?'সাপোর্ট নিয়েছে':'রেজিস্ট্যান্স নিয়েছে',lv.length?'লেভেল '+f(lv[lv.length-1]):'কাছাকাছি লেভেল নেই'));
+o.rows.push(chk(vA&&vP,'ভলিউম (গড় + প্রোফাইল)','ভলিউম গড়ের '+(k[bo].v/av).toFixed(2)+'x, POC '+f(poc)+(vP?' পার':' পার হয়নি')));
+o.rows.push(chk(pn.length>0,'ক্যান্ডেল প্যাটার্ন',pn.length?pn.join(', '):'কনফার্মেশন নেই'));
+o.rows.push(chk(mOK,'MACD হিস্টোগ্রাম',mOK?'দিক মিলছে':'দিক মিলছে না'));
+o.rows.push(chk(sOK,'BB Squeeze ব্রেকআউট',sq?(sOK?'স্কুইজের পর মিডল ব্যান্ড পার':'স্কুইজ আছে, দিক মেলেনি'):'স্কুইজ নেই'));
+const core=[rOK,lv.length>0,vA&&vP,pn.length>0],extra=[tOK,mOK,sOK].filter(Boolean).length;
+const risk0=Math.abs(px-(S?cl-.1*a:ch+.1*a));
+o.key=side+bo;
+if(!core.every(Boolean)){o.v='SKIP';o.msg='শর্ত পূরণ হয়নি, ট্রেড নয়'}
+else if(opp){o.v='SKIP';o.msg='1H ট্রেন্ড উল্টো দিকে, ট্রেড নয়'}
+else if(extra<MIN_EXTRA){o.v='SKIP';o.msg='অতিরিক্ত কনফার্মেশন কম, ট্রেড নয়'}
+else if(risk0>3*a){o.v='SKIP';o.msg='SL অনেক দূরে, ট্রেড নয়'}
+else{o.v='TAKE';o.msg=S?'BUY এন্ট্রি নেওয়া যায়':'SELL এন্ট্রি নেওয়া যায়';o.ref={S,sl:S?cl-.1*a:ch+.1*a}}
+return o}
+
+function plan(o,px){if(!o.ref)return'';const{S,sl}=o.ref,r=Math.abs(px-sl),t2=S?px+2*r:px-2*r,t25=S?px+2.5*r:px-2.5*r,q=bal*.01/r,nt=q*px;
+return`<div class="plan"><div>এন্ট্রি<span>${f(px)}</span></div><div>স্টপ লস<span>${f(sl)}</span></div><div>টার্গেট ১:২<span>${f(t2)}</span></div><div>টার্গেট ১:২.৫<span>${f(t25)}</span></div><div>ঝুঁকি (১%)<span>$${(bal*.01).toFixed(2)}</span></div><div>পজিশন / লিভারেজ<span>$${f(nt)} / ${(nt/bal).toFixed(1)}x</span></div></div>`}
+
+function render(){const el=document.getElementById('cards');
+el.innerHTML=SYMS.map(([s,nm])=>{const d=D[s],px=prices[s];if(!d)return`<div class="card"><div class="top"><b>${nm}</b><span class="px">${px?f(px):'…'}</span></div><div class="vd">ডেটা লোড হচ্ছে</div></div>`;
+const o=d.o,lbl=o.v=='TAKE'?'নাও: '+o.side:o.v=='WAIT'?'অপেক্ষা করো':'স্কিপ';
+return`<div class="card"><div class="top"><b>${nm}</b><span class="px">${f(px||d.px)}</span></div><div class="vd ${o.v} ${o.side||''}">${lbl}<small>${o.msg}</small></div><ul>${o.rows.map(r=>`<li class="${r.ok?'y':'n'}"><b>${r.ok?'✓':'✗'}</b><div>${r.t}<small>${r.d}</small></div></li>`).join('')}</ul>${plan(o,px||d.px)}</div>`}).join('')}
+
+function beep(){try{actx=actx||new AudioContext();const t=actx.currentTime;[880,1175].forEach((fr,i)=>{const os=actx.createOscillator(),g=actx.createGain();os.frequency.value=fr;os.connect(g);g.connect(actx.destination);g.gain.setValueAtTime(.2,t+i*.22);g.gain.exponentialRampToValueAtTime(.001,t+i*.22+.2);os.start(t+i*.22);os.stop(t+i*.22+.2)})}catch(e){}}
+function notify(nm,o){const t=document.getElementById('toast');t.style.display='block';t.textContent='নতুন সেটআপ: '+nm+' '+o.side+'. কার্ড দেখো';setTimeout(()=>t.style.display='none',15000);
+if(sound){beep();navigator.vibrate&&navigator.vibrate([300,120,300]);try{new Notification('Signal Desk: '+nm+' '+o.side)}catch(e){}}}
+
+async function load(s,nm,full){try{const[K,H]=await Promise.all([jget(`/api/v3/klines?symbol=${s}&interval=${tf}&limit=500`),(full||!D[s]?.H)?jget(`/api/v3/klines?symbol=${s}&interval=1h&limit=200`):Promise.resolve(D[s].H)]);
+const m=a=>a.map(x=>({t:x[0],o:+x[1],h:+x[2],l:+x[3],c:+x[4],v:+x[5]})),k=m(K),h=Array.isArray(H)&&H[0]&&H[0].t?H:m(H),px=prices[s]||k[k.length-1].c,o=analyze(k,h,px);
+D[s]={H:h,px,o};if(o.v=='TAKE'&&seen[s]!=o.key){seen[s]=o.key;notify(nm,o)}}catch(e){}}
+async function tick(){try{const p=await jget('/api/v3/ticker/price?symbols='+encodeURIComponent(JSON.stringify(SYMS.map(x=>x[0]))));p.forEach(x=>prices[x.symbol]=+x.price);render()}catch(e){}}
+let n=0;async function cycle(){await Promise.all(SYMS.map(([s,nm])=>load(s,nm,n%12==0)));n++;render()}
+document.querySelectorAll('[data-t]').forEach(b=>{b.classList.toggle('on',b.dataset.t==tf);b.onclick=()=>{tf=b.dataset.t;try{localStorage.setItem('tf',tf)}catch(e){}document.querySelectorAll('[data-t]').forEach(x=>x.classList.toggle('on',x==b));D={};render();cycle()}});
+const bi=document.getElementById('bal');bi.value=bal;bi.onchange=()=>{bal=+bi.value||1000;try{localStorage.setItem('bal',bal)}catch(e){}render()};
+document.getElementById('snd').onclick=function(){sound=true;beep();try{Notification.requestPermission()}catch(e){}this.textContent='অ্যালার্ট চালু আছে';this.classList.add('on')};
+render();tick();cycle();setInterval(tick,1000);setInterval(cycle,6000);
+</script></body></html>
