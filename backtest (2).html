@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="bn"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Backtest Desk</title>
+<style>
+:root{--bg:#10151c;--pn:#18202b;--tx:#e6ebf2;--mu:#8795a8;--g:#2fbf8a;--r:#ef5b5b;--ac:#e0b44c}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--tx);font:15px/1.5 system-ui,sans-serif;padding:14px;max-width:720px;margin:auto}
+h1{font-size:20px;margin:4px 0 12px}.pn{background:var(--pn);border-radius:10px;padding:12px;margin-bottom:12px}
+label{display:block;color:var(--mu);font-size:13px;margin:8px 0 3px}
+select,input{width:100%;padding:9px;background:var(--bg);color:var(--tx);border:1px solid #2a3544;border-radius:7px;font-size:15px}
+.row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+button{width:100%;margin-top:12px;padding:12px;background:var(--ac);color:#111;border:0;border-radius:8px;font-size:16px;font-weight:600}
+button:disabled{opacity:.5}
+.st{display:grid;grid-template-columns:1fr 1fr;gap:8px}.st div{background:var(--bg);padding:8px;border-radius:7px}
+.st b{display:block;font-size:17px}.st span{color:var(--mu);font-size:12px}
+.g{color:var(--g)}.r{color:var(--r)}
+canvas{width:100%;height:180px;background:var(--bg);border-radius:7px}
+.tb{max-height:300px;overflow:auto;font-size:12px}table{width:100%;border-collapse:collapse}
+td,th{padding:4px 5px;text-align:left;white-space:nowrap}th{color:var(--mu);position:sticky;top:0;background:var(--pn)}
+#msg{color:var(--mu);font-size:13px;margin-top:8px}
+</style></head><body>
+<h1>Backtest Desk</h1>
+<div class="pn">
+<div class="row"><div><label>Pair</label><select id="sym"><option value="BTCUSDT">BTCUSDT</option><option value="PAXGUSDT">PAXGUSDT (Gold)</option></select></div>
+<div><label>Data (years)</label><select id="yrs"><option>1</option><option>2</option><option selected>3</option></select></div></div>
+<div class="row"><div><label>Start balance ($)</label><input id="bal" type="number" value="5000"></div>
+<div><label>Risk per trade (%)</label><input id="risk" type="number" value="1" step="0.1"></div></div>
+<div class="row"><div><label>Reward : Risk</label><input id="rr" type="number" value="2" step="0.1"></div>
+<div><label>Touch window (candles)</label><input id="win" type="number" value="5"></div></div>
+<div class="row"><div><label>SL swing lookback (candles)</label><input id="lb" type="number" value="5"></div>
+<div><label>Volatility filter (BB width vs avg)</label><select id="vf"><option value="1">On</option><option value="0">Off</option></select></div></div>
+<div class="row"><div><label>Risk mode</label><select id="rm"><option value="1">Fixed (always 1% of start = $50)</option><option value="0">Compounding (1% of current balance)</option></select></div><div></div></div>
+<button id="go">Run backtest</button><div id="msg"></div>
+</div>
+<div id="out" style="display:none">
+<div class="pn"><div class="st" id="st"></div></div>
+<div class="pn"><canvas id="cv"></canvas></div>
+<div class="pn"><div class="tb"><table id="tb"></table></div></div>
+</div>
+<script>
+const $=i=>document.getElementById(i),IV=900000,HOSTS=['https://api.binance.com','https://data-api.binance.vision'];
+async function kl(sym,start,cb){
+  let all=[],t=start,host=0;
+  while(true){
+    let rows=null;
+    for(let h=host;h<HOSTS.length;h++){
+      try{const r=await fetch(`${HOSTS[h]}/api/v3/klines?symbol=${sym}&interval=15m&startTime=${t}&limit=1000`);
+        if(r.ok){rows=await r.json();host=h;break}}catch(e){}
+    }
+    if(rows===null)throw new Error('Binance data could not be loaded. Check internet/VPN.');
+    if(!rows.length)break;
+    all.push(...rows);t=rows[rows.length-1][0]+IV;cb(all.length);
+    if(rows.length<1000)break;
+  }
+  const now=Date.now();
+  while(all.length&&all[all.length-1][6]>now)all.pop();
+  return all.map(k=>({t:k[0],o:+k[1],h:+k[2],l:+k[3],c:+k[4]}));
+}
+function ema(a,n,from){const o=Array(a.length).fill(null),k=2/(n+1);let s=0;
+  for(let i=from;i<a.length;i++){
+    if(i<from+n-1){s+=a[i];if(i==from+n-2+1-1&&false){}}
+    if(i==from+n-1){s+=0;o[i]=(s)/n}
+    else if(i>from+n-1)o[i]=a[i]*k+o[i-1]*(1-k);
+  }return o}
+function emaS(a,n,from){ // SMA-seeded EMA like TradingView
+  const o=Array(a.length).fill(null),k=2/(n+1);let s=0;
+  for(let i=from;i<a.length;i++){
+    if(i<from+n){s+=a[i];if(i==from+n-1)o[i]=s/n}
+    else o[i]=a[i]*k+o[i-1]*(1-k);
+  }return o}
+function calc(C){
+  const n=C.length,cl=C.map(x=>x.c);
+  const e12=emaS(cl,12,0),e26=emaS(cl,26,0),m=Array(n).fill(0);
+  for(let i=25;i<n;i++)m[i]=e12[i]-e26[i];
+  const sg=emaS(m,9,25),macd=m,hist=Array(n).fill(null);
+  for(let i=0;i<n;i++)if(sg[i]!==null)hist[i]=macd[i]-sg[i];
+  const bas=Array(n).fill(null),up=Array(n).fill(null),lo=Array(n).fill(null),bw=Array(n).fill(null);
+  for(let i=19;i<n;i++){let s=0,q=0;for(let j=i-19;j<=i;j++){s+=cl[j];q+=cl[j]*cl[j]}
+    const mu=s/20,sd=Math.sqrt(Math.max(q/20-mu*mu,0));
+    bas[i]=mu;up[i]=mu+2*sd;lo[i]=mu-2*sd;bw[i]=(up[i]-lo[i])/mu}
+  const bwa=Array(n).fill(null);
+  for(let i=119;i<n;i++){let s=0;for(let j=i-99;j<=i;j++)s+=bw[j];bwa[i]=s/100}
+  return{macd,sg,hist,bas,up,lo,bw,bwa};
+}
+function run(C,p){
+  const I=calc(C),n=C.length;p.bal0=p.bal;let bal=p.bal,pos=null,used=-1,tr=[],eq=[bal],peak=bal,mdd=0;
+  for(let i=130;i<n-1;i++){
+    if(pos){
+      const c=C[i];let res=null,px=null;
+      if(pos.d==1){if(c.l<=pos.sl){res='L';px=pos.sl}else if(c.h>=pos.tp){res='W';px=pos.tp}}
+      else{if(c.h>=pos.sl){res='L';px=pos.sl}else if(c.l<=pos.tp){res='W';px=pos.tp}}
+      let hard=!!res;
+      if(!res){
+        const cu=I.macd[i-1]<I.sg[i-1]&&I.macd[i]>=I.sg[i],cd=I.macd[i-1]>I.sg[i-1]&&I.macd[i]<=I.sg[i];
+        if((pos.d==1&&cd)||(pos.d==-1&&cu)){res='X';px=c.c}
+      }
+      if(res){const pnl=pos.risk$*pos.d*(px-pos.e)/pos.r;bal+=pnl;
+        tr.push({d:pos.d,t:pos.t,e:pos.e,sl:pos.sl,tp:pos.tp,res,pnl,bal,x:px});
+        eq.push(bal);peak=Math.max(peak,bal);mdd=Math.max(mdd,(peak-bal)/peak);pos=null}
+      if(pos||hard)continue;
+    }
+    if(p.vf&&!(I.bw[i]>I.bwa[i]))continue;
+    const h=I.hist[i],hp=I.hist[i-1];if(h===null||hp===null)continue;
+    let d=0,cj=-1;
+    if(h>0&&h>hp&&C[i].c>I.bas[i]){
+      for(let j=i;j>i-p.win;j--)if(I.macd[j-1]<I.sg[j-1]&&I.macd[j]>=I.sg[j]){cj=j;break}
+      if(cj>=0){let t=false;for(let j=i;j>i-p.win;j--)if(C[j].h>=I.up[j]){t=true;break}
+        if(t)d=1}
+    }
+    if(!d&&h<0&&h<hp&&C[i].c<I.bas[i]){
+      for(let j=i;j>i-p.win;j--)if(I.macd[j-1]>I.sg[j-1]&&I.macd[j]<=I.sg[j]){cj=j;break}
+      if(cj>=0){let t=false;for(let j=i;j>i-p.win;j--)if(C[j].l<=I.lo[j]){t=true;break}
+        if(t)d=-1}
+    }
+    if(!d||cj===used)continue;
+    const e=C[i+1].o;let sl;
+    if(d==1){sl=Infinity;for(let j=i-p.lb+1;j<=i;j++)sl=Math.min(sl,C[j].l);if(sl>=e)continue}
+    else{sl=-Infinity;for(let j=i-p.lb+1;j<=i;j++)sl=Math.max(sl,C[j].h);if(sl<=e)continue}
+    const r=Math.abs(e-sl);used=cj;
+    pos={d,e,sl,r,tp:e+d*r*p.rr,t:C[i+1].t,risk$:(p.fixed?p.bal0:bal)*p.risk/100};
+  }
+  return{tr,eq,bal,mdd};
+}
+function show(r,p,C){
+  const w=r.tr.filter(x=>x.pnl>0).length,L=r.tr.length-w;
+  const gp=r.tr.filter(x=>x.pnl>0).reduce((a,x)=>a+x.pnl,0),gl=-r.tr.filter(x=>x.pnl<0).reduce((a,x)=>a+x.pnl,0);
+  const net=r.bal-p.bal,f=(v,d=2)=>v.toLocaleString('en-US',{maximumFractionDigits:d});
+  const cells=[['Candles tested',f(C.length,0)],['Trades',r.tr.length],['Win rate',r.tr.length?f(w/r.tr.length*100,1)+'%':'-'],
+  ['Wins / Losses',w+' / '+L],['Net profit',`<span class="${net>=0?'g':'r'}">$${f(net)}</span>`],['Final balance','$'+f(r.bal)],
+  ['Profit factor',gl?f(gp/gl):'-'],['Max drawdown',f(r.mdd*100,1)+'%']];
+  $('st').innerHTML=cells.map(c=>`<div><span>${c[0]}</span><b>${c[1]}</b></div>`).join('');
+  const cv=$('cv'),dpr=devicePixelRatio||1,W=cv.clientWidth,H=cv.clientHeight;cv.width=W*dpr;cv.height=H*dpr;
+  const x=cv.getContext('2d');x.scale(dpr,dpr);x.clearRect(0,0,W,H);
+  const mn=Math.min(...r.eq),mx=Math.max(...r.eq),pd=8;x.strokeStyle='#e0b44c';x.lineWidth=1.5;x.beginPath();
+  r.eq.forEach((v,i)=>{const X=pd+i/(Math.max(r.eq.length-1,1))*(W-2*pd),Y=H-pd-(v-mn)/((mx-mn)||1)*(H-2*pd);i?x.lineTo(X,Y):x.moveTo(X,Y)});x.stroke();
+  const dt=t=>new Date(t).toISOString().slice(0,16).replace('T',' ');
+  $('tb').innerHTML='<tr><th>Time (UTC)</th><th>Side</th><th>Entry</th><th>SL</th><th>TP</th><th>Exit</th><th>P/L $</th></tr>'+
+   r.tr.slice().reverse().map(t=>`<tr><td>${dt(t.t)}</td><td>${t.d>0?'Buy':'Sell'}</td><td>${f(t.e)}</td><td>${f(t.sl)}</td><td>${f(t.tp)}</td><td>${t.res=='X'?'MACD '+f(t.x):t.res=='W'?'TP':'SL'}</td><td class="${t.pnl>=0?'g':'r'}">${f(t.pnl)}</td></tr>`).join('');
+  $('out').style.display='block';
+}
+$('go').onclick=async()=>{
+  const b=$('go'),m=$('msg');b.disabled=true;
+  try{
+    const p={bal:+$('bal').value,risk:+$('risk').value,rr:+$('rr').value,win:+$('win').value,lb:+$('lb').value,vf:$('vf').value=='1',fixed:$('rm').value=='1'};
+    const start=Date.now()-(+$('yrs').value)*365*86400000;
+    const C=await kl($('sym').value,start,k=>m.textContent='Loading data: '+k.toLocaleString()+' candles...');
+    m.textContent='Running on '+C.length.toLocaleString()+' candles (latest: '+new Date(C[C.length-1].t).toISOString().slice(0,16).replace('T',' ')+' UTC)';
+    await new Promise(r=>setTimeout(r,30));
+    show(run(C,p),p,C);
+  }catch(e){m.textContent='Error: '+e.message}
+  b.disabled=false;
+};
+</script></body></html>
