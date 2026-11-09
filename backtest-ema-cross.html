@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="bn">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>EMA 9/21 ব্যাকটেস্ট</title>
+<style>
+:root{--bg:#F5F6F8;--card:#fff;--ink:#16212C;--mute:#5E6B78;--line:#DCE1E7;--acc:#1F5FBF;--win:#17803D;--loss:#B42318}
+@media (prefers-color-scheme:dark){:root{--bg:#10151B;--card:#18202A;--ink:#E8EDF2;--mute:#97A4B1;--line:#2B3744;--acc:#6EA2F0;--win:#4CC27B;--loss:#F2796E}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 system-ui,-apple-system,"Noto Sans Bengali","Segoe UI",sans-serif;padding:16px;max-width:640px;margin-inline:auto}
+h1{font-size:20px;margin:0 0 4px}
+p.sub{margin:0 0 14px;color:var(--mute);font-size:14px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px;margin-bottom:12px}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+label{display:block;font-size:13px;color:var(--mute)}
+select,input{width:100%;margin-top:3px;padding:9px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--ink);font:inherit}
+button{width:100%;margin-top:12px;padding:12px;border:0;border-radius:8px;background:var(--acc);color:#fff;font:600 16px inherit;font-family:inherit}
+button:disabled{opacity:.6}
+#st{font-size:14px;color:var(--mute);margin-top:8px;min-height:20px}
+.big{font-size:30px;font-weight:700}
+.row{display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--line);font-size:15px}
+.row:last-child{border:0}
+.win{color:var(--win)}.loss{color:var(--loss)}
+svg{width:100%;height:150px;display:block}
+.note{font-size:13px;color:var(--mute)}
+</style>
+</head>
+<body>
+<h1>EMA 9/21 + ATR স্টপ ব্যাকটেস্ট</h1>
+<p class="sub">শুধু Binance-এর আসল ক্যান্ডেল ডেটা। কোনো বানানো ডেটা নেই।</p>
+
+<div class="card">
+<div class="grid">
+<label>পেয়ার<select id="sym"><option>BTCUSDT</option><option>PAXGUSDT</option><option>ETHUSDT</option></select></label>
+<label>টাইমফ্রেম<select id="iv"><option value="1h" selected>1h</option><option value="4h">4h</option><option value="15m">15m</option></select></label>
+<label>ডেটা (বছর)<select id="yrs"><option>1</option><option selected>2</option><option>3</option></select></label>
+<label>ট্রেড<select id="mode"><option value="long">শুধু Buy (সোর্সের নিয়ম)</option><option value="both">Buy + Sell</option></select></label>
+<label>দ্রুত EMA<input id="fast" type="number" value="9"></label>
+<label>ধীর EMA<input id="slow" type="number" value="21"></label>
+<label>স্টপ = ATR ×<input id="am" type="number" step="0.1" value="2"></label>
+<label>টার্গেট (R), 0 = নেই<input id="tp" type="number" step="0.5" value="0"></label>
+<label>খরচ প্রতি পাশে (%)<input id="cost" type="number" step="0.01" value="0.02"></label>
+<label>প্রতি ট্রেডে ঝুঁকি ($)<input id="risk" type="number" value="50"></label>
+</div>
+<button id="go">ব্যাকটেস্ট চালাও</button>
+<div id="st"></div>
+</div>
+
+<div id="out"></div>
+
+<p class="note">নিয়ম: ক্রস হওয়া ক্যান্ডেল বন্ধ হলে পরের ক্যান্ডেলের ওপেনে এন্ট্রি। উল্টো ক্রসে পরের ওপেনে বের হওয়া। স্টপ বা টার্গেট দুটোই এক ক্যান্ডেলে ছুঁলে স্টপকেই আগে ধরা হয়। এটা শিক্ষামূলক টেস্ট, আর্থিক পরামর্শ নয়।</p>
+
+<script>
+const $=id=>document.getElementById(id);
+const hosts=['https://api.binance.com','https://data-api.binance.vision'];
+async function kl(sym,iv,end){
+  let err='';
+  for(const h of hosts){
+    try{
+      const r=await fetch(h+'/api/v3/klines?symbol='+sym+'&interval='+iv+'&limit=1000'+(end?'&endTime='+end:''));
+      if(r.ok) return await r.json();
+      err=r.status;
+    }catch(e){err=e.message}
+  }
+  throw new Error('Binance থেকে ডেটা আসেনি ('+err+')');
+}
+async function load(sym,iv,years){
+  const start=Date.now()-years*365*864e5;
+  let all=[],end=null;
+  for(let n=0;n<80;n++){
+    const b=await kl(sym,iv,end);
+    if(!b.length) break;
+    all=b.concat(all);
+    $('st').textContent='ডেটা আনছি... '+all.length+' ক্যান্ডেল';
+    end=b[0][0]-1;
+    if(b[0][0]<=start||b.length<1000) break;
+  }
+  const now=Date.now();
+  return all.filter(k=>k[0]>=start&&k[6]<now).map(k=>({t:k[0],o:+k[1],h:+k[2],l:+k[3],c:+k[4]}));
+}
+const ema=(v,n)=>{const k=2/(n+1),o=[v[0]];for(let i=1;i<v.length;i++)o.push(v[i]*k+o[i-1]*(1-k));return o};
+const atrf=(c,n)=>{const o=[];let a=0;for(let i=0;i<c.length;i++){
+  const tr=i?Math.max(c[i].h-c[i].l,Math.abs(c[i].h-c[i-1].c),Math.abs(c[i].l-c[i-1].c)):c[i].h-c[i].l;
+  a=i<n?(a*i+tr)/(i+1):(a*(n-1)+tr)/n;o.push(a)}return o};
+
+function run(c,p){
+  const f=ema(c.map(x=>x.c),p.fast),s=ema(c.map(x=>x.c),p.slow),a=atrf(c,14);
+  const warm=Math.max(p.slow,14)*4;
+  let pos=null,trades=[];
+  const open=(dir,price,at,i)=>{
+    const d=p.am*at;
+    pos={dir,e:price,sl:dir==1?price-d:price+d,d,tp:p.tp>0?(dir==1?price+d*p.tp:price-d*p.tp):0,t:c[i].t,closeNext:false};
+  };
+  const hit=(k)=>{
+    if(pos.dir==1){
+      if(k.o<=pos.sl) return k.o;
+      if(k.l<=pos.sl) return pos.sl;
+      if(pos.tp&&k.h>=pos.tp) return pos.tp;
+    }else{
+      if(k.o>=pos.sl) return k.o;
+      if(k.h>=pos.sl) return pos.sl;
+      if(pos.tp&&k.l<=pos.tp) return pos.tp;
+    }
+    return null;
+  };
+  const close=(x)=>{
+    const g=pos.dir*(x-pos.e)/pos.d;
+    const cr=2*(p.cost/100)*pos.e/pos.d;
+    trades.push({r:g-cr,t:pos.t});
+    pos=null;
+  };
+  for(let i=warm;i<c.length-1;i++){
+    const k=c[i];
+    if(pos){
+      let x=hit(k);
+      if(x===null&&pos.closeNext) x=k.o;
+      if(x!==null){
+        const wasRev=pos.closeNext&&x===k.o;
+        const odir=-pos.dir;
+        close(x);
+        if(wasRev&&(p.mode=='both'||odir==1)){
+          open(odir,k.o,a[i-1],i);
+          const y=hit(k); if(y!==null) close(y);
+        }
+      }
+    }
+    const up=f[i-1]<=s[i-1]&&f[i]>s[i], dn=f[i-1]>=s[i-1]&&f[i]<s[i];
+    if(pos){
+      if((pos.dir==1&&dn)||(pos.dir==-1&&up)) pos.closeNext=true;
+    }else{
+      if(up) open(1,c[i+1].o,a[i],i+1);
+      else if(dn&&p.mode=='both') open(-1,c[i+1].o,a[i],i+1);
+    }
+  }
+  return trades;
+}
+const wr=t=>t.length?100*t.filter(x=>x.r>0).length/t.length:0;
+function stats(t,risk){
+  const w=t.filter(x=>x.r>0),l=t.filter(x=>x.r<=0);
+  const gw=w.reduce((a,x)=>a+x.r,0),gl=-l.reduce((a,x)=>a+x.r,0);
+  let eq=0,pk=0,dd=0,curve=[0];
+  t.forEach(x=>{eq+=x.r*risk;curve.push(eq);pk=Math.max(pk,eq);dd=Math.max(dd,pk-eq)});
+  const aw=w.length?gw/w.length:0,al=l.length?gl/l.length:0;
+  return {n:t.length,win:wr(t),pf:gl?gw/gl:0,net:eq,dd,curve,aw,al,exp:t.length?(gw-gl)/t.length:0,
+    be:aw+al?100*al/(aw+al):0};
+}
+function chart(cv){
+  if(cv.length<2) return '';
+  const mn=Math.min(...cv),mx=Math.max(...cv),W=600,H=150,rg=(mx-mn)||1;
+  const pts=cv.map((v,i)=>(i/(cv.length-1)*W).toFixed(1)+','+(H-6-(v-mn)/rg*(H-12)).toFixed(1)).join(' ');
+  const zy=(H-6-(0-mn)/rg*(H-12)).toFixed(1);
+  return '<svg viewBox="0 0 '+W+' '+H+'" preserveAspectRatio="none"><line x1="0" x2="'+W+'" y1="'+zy+'" y2="'+zy+'" stroke="currentColor" stroke-opacity=".25" stroke-dasharray="4"/><polyline fill="none" stroke="var(--acc)" stroke-width="2" points="'+pts+'"/></svg>';
+}
+const row=(a,b,cls)=>'<div class="row"><span>'+a+'</span><b class="'+(cls||'')+'">'+b+'</b></div>';
+$('go').onclick=async()=>{
+  const btn=$('go');btn.disabled=true;$('out').innerHTML='';
+  const p={fast:+$('fast').value,slow:+$('slow').value,am:+$('am').value,tp:+$('tp').value,cost:+$('cost').value,mode:$('mode').value};
+  const risk=+$('risk').value;
+  try{
+    const c=await load($('sym').value,$('iv').value,+$('yrs').value);
+    if(c.length<200) throw new Error('যথেষ্ট ক্যান্ডেল আসেনি');
+    $('st').textContent='হিসাব করছি... ('+c.length+' ক্যান্ডেল)';
+    const t=run(c,p),S=stats(t,risk);
+    if(!S.n){$('out').innerHTML='<div class="card">কোনো ট্রেড হয়নি।</div>';return}
+    const h=Math.floor(t.length/2),w1=wr(t.slice(0,h)),w2=wr(t.slice(h));
+    const from=new Date(c[0].t).toISOString().slice(0,10),to=new Date(c[c.length-1].t).toISOString().slice(0,10);
+    $('out').innerHTML=
+      '<div class="card"><div class="note">Win rate ('+$('sym').value+' '+$('iv').value+', '+from+' থেকে '+to+')</div>'+
+      '<div class="big '+(S.win>=S.be?'win':'loss')+'">'+S.win.toFixed(1)+'%</div>'+
+      '<div class="note">এই গড় জয়-হারে break-even win rate: '+S.be.toFixed(1)+'%</div></div>'+
+      '<div class="card">'+
+      row('মোট ট্রেড',S.n)+
+      row('Profit factor',S.pf.toFixed(2),S.pf>1?'win':'loss')+
+      row('নেট লাভ/লস ($, ঝুঁকি $'+risk+')',(S.net>=0?'+':'')+S.net.toFixed(0),S.net>=0?'win':'loss')+
+      row('Max drawdown ($)',S.dd.toFixed(0),'loss')+
+      row('গড় জয় / গড় হার (R)',S.aw.toFixed(2)+' / '+S.al.toFixed(2))+
+      row('প্রতি ট্রেডে expectancy (R)',S.exp.toFixed(2),S.exp>0?'win':'loss')+
+      row('প্রথম অর্ধেক win rate',w1.toFixed(1)+'%')+
+      row('দ্বিতীয় অর্ধেক win rate',w2.toFixed(1)+'%')+
+      '</div><div class="card"><div class="note">ইকুইটি কার্ভ ($)</div>'+chart(S.curve)+'</div>';
+    $('st').textContent='শেষ। স্ক্রিনশট নিয়ে Claude-কে পাঠাও।';
+  }catch(e){
+    $('st').textContent='ত্রুটি: '+e.message;
+  }finally{btn.disabled=false}
+};
+</script>
+</body>
+</html>
