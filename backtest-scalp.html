@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="bn"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Backtest Scalp – 1m/5m + Binance fee</title>
+<style>
+:root{--bg:#0f1318;--card:#1a212b;--tx:#e8edf3;--mu:#8b97a6;--ac:#3ea6ff;--g:#2ecc71;--r:#ff5c5c}
+@media(prefers-color-scheme:light){:root{--bg:#f3f5f8;--card:#fff;--tx:#14181e;--mu:#5d6876}}
+*{box-sizing:border-box}body{margin:0;padding:12px;background:var(--bg);color:var(--tx);font:14px/1.4 system-ui,sans-serif}
+h1{font-size:18px;margin:4px 0 10px}.card{background:var(--card);border-radius:10px;padding:12px;margin-bottom:10px}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}label{font-size:12px;color:var(--mu);display:block}
+select,input{width:100%;padding:7px;border-radius:6px;border:1px solid #3a4452;background:var(--bg);color:var(--tx);font-size:14px}
+button{padding:10px 14px;border:0;border-radius:8px;background:var(--ac);color:#fff;font-size:14px;margin:8px 6px 0 0}
+button.s{background:#556}.k{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;text-align:center}
+.k div{background:var(--bg);border-radius:8px;padding:8px}.k b{display:block;font-size:17px}
+.g{color:var(--g)}.r{color:var(--r)}#st{color:var(--mu);margin-top:6px;min-height:18px}
+.w{overflow-x:auto}table{border-collapse:collapse;width:100%;font-size:12px;white-space:nowrap}
+td,th{padding:5px 6px;border-bottom:1px solid #3a4452;text-align:left}tr.c{cursor:pointer}
+</style></head><body>
+<h1>Scalping Backtest: 1m / 5m + আসল Binance ফি</h1>
+<div class="card"><div class="grid">
+<div><label>Pair</label><select id="sym"><option>BTCUSDT</option><option>ETHUSDT</option><option>PAXGUSDT</option></select></div>
+<div><label>Timeframe</label><select id="tf"><option>1m</option><option selected>5m</option></select></div>
+<div><label>কত দিনের ডেটা (1m-এ ৩০ ভালো)</label><input id="days" type="number" value="60" min="7" max="365"></div>
+<div><label>ফি ধরন</label><select id="fp"><option value="0.1">Spot (0.1%)</option><option value="0.075">Spot + BNB (0.075%)</option><option value="0.05" selected>Futures taker (0.05%)</option><option value="0.02">Futures maker (0.02%)</option></select></div>
+<div><label>Cost প্রতি সাইডে (%)</label><input id="cost" type="number" value="0.05" step="0.005"></div>
+<div><label>Balance ($)</label><input id="bal" type="number" value="5000"></div>
+<div><label>Risk প্রতি ট্রেডে ($)</label><input id="risk" type="number" value="50"></div>
+<div><label>ফি গার্ড (ফি > ঝুঁকির ?% হলে স্কিপ)</label><select id="fg"><option value="0.15">১৫%</option><option value="0.25" selected>২৫%</option><option value="0.4">৪০%</option><option value="9">বন্ধ</option></select></div>
+</div><button id="ld">১. রিয়েল ডেটা লোড</button><div id="st"></div></div>
+
+<div class="card"><b>সেটিং</b><div class="grid" style="margin-top:8px">
+<div><label>Trend EMA</label><select id="te"><option value="0">বন্ধ</option><option>100</option><option selected>200</option><option>400</option></select></div>
+<div><label>ADX ন্যূনতম</label><select id="ax"><option value="0">বন্ধ</option><option>20</option><option selected>25</option></select></div>
+<div><label>BB width বাড়ছে</label><select id="bw"><option value="0">বন্ধ</option><option value="1">চালু</option></select></div>
+<div><label>Volume গড়ের উপরে</label><select id="vo"><option value="0">বন্ধ</option><option value="1" selected>চালু</option></select></div>
+<div><label>RSI গার্ড (৭০/৩০)</label><select id="rs"><option value="0">বন্ধ</option><option value="1">চালু</option></select></div>
+<div><label>টানা ২ লসে বিরতি</label><select id="cd"><option value="0">বন্ধ</option><option value="1" selected>চালু</option></select></div>
+<div><label>Reward:Risk</label><select id="rr"><option>0.5</option><option>0.75</option><option selected>1</option><option>1.5</option></select></div>
+<div><label>SL: swing lookback</label><select id="sl"><option>3</option><option selected>5</option><option>8</option></select></div>
+</div><button id="go">২. ব্যাকটেস্ট চালাও</button><button id="af" class="s">৩. Auto-find (train/test)</button></div>
+
+<div class="card" id="out" style="display:none"><b id="ot"></b><div class="k" id="kp" style="margin-top:8px"></div></div>
+<div class="card" id="afc" style="display:none"><b>Auto-find ফল</b> <span id="afn" style="color:var(--mu)"></span>
+<div class="w"><table id="aft"></table></div></div>
+
+<script>
+const $=id=>document.getElementById(id);let D=null;
+const st=t=>$('st').textContent=t;
+$('fp').onchange=()=>$('cost').value=$('fp').value;
+function ema(a,n){const k=2/(n+1),o=[a[0]];for(let i=1;i<a.length;i++)o[i]=a[i]*k+o[i-1]*(1-k);return o}
+function rsiF(c,n=14){const o=new Array(c.length).fill(50);let g=0,l=0;for(let i=1;i<c.length;i++){const d=c[i]-c[i-1],G=d>0?d:0,L=d<0?-d:0;if(i<=n){g+=G;l+=L;if(i==n){g/=n;l/=n;o[i]=l==0?100:100-100/(1+g/l)}}else{g=(g*(n-1)+G)/n;l=(l*(n-1)+L)/n;o[i]=l==0?100:100-100/(1+g/l)}}return o}
+function adxF(h,l,c,n=14){const N=c.length,o=new Array(N).fill(0);let s=0,sp=0,sm=0,ax=0,cn=0;
+for(let i=1;i<N;i++){const up=h[i]-h[i-1],dn=l[i-1]-l[i],P=up>dn&&up>0?up:0,M=dn>up&&dn>0?dn:0,T=Math.max(h[i]-l[i],Math.abs(h[i]-c[i-1]),Math.abs(l[i]-c[i-1]));
+if(i<=n){s+=T;sp+=P;sm+=M;if(i<n)continue}else{s=s-s/n+T;sp=sp-sp/n+P;sm=sm-sm/n+M}
+const pi=100*sp/s,mi=100*sm/s,dx=100*Math.abs(pi-mi)/((pi+mi)||1);cn++;
+if(cn<=n){ax+=dx;if(cn==n){ax/=n;o[i]=ax}}else{ax=(ax*(n-1)+dx)/n;o[i]=ax}}return o}
+
+$('ld').onclick=async()=>{
+ try{const iv=$('tf').value,sym=$('sym').value,start=Date.now()-$('days').value*864e5;let end=Date.now(),rows=[];
+ while(end>start){st('ডেটা আসছে… '+rows.length+' ক্যান্ডেল');
+  const r=await fetch(`https://api.binance.com/api/v3/klines?symbol=${sym}&interval=${iv}&limit=1000&endTime=${end}`);
+  const j=await r.json();if(!Array.isArray(j)||!j.length)break;rows=j.concat(rows);end=j[0][0]-1}
+ rows=rows.filter(x=>x[0]>=start);rows.pop();
+ D={t:rows.map(x=>x[0]),o:rows.map(x=>+x[1]),h:rows.map(x=>+x[2]),l:rows.map(x=>+x[3]),c:rows.map(x=>+x[4]),v:rows.map(x=>+x[5])};
+ prep();st('লোড শেষ: '+D.c.length+' ক্যান্ডেল (রিয়েল Binance ডেটা)')}
+ catch(e){st('ডেটা আনতে সমস্যা: '+e.message)}};
+
+function prep(){const {c,h,l,v}=D,N=c.length;
+ const e12=ema(c,12),e26=ema(c,26);D.mac=e12.map((x,i)=>x-e26[i]);D.sig=ema(D.mac,9);D.hist=D.mac.map((x,i)=>x-D.sig[i]);
+ D.bm=[];D.bu=[];D.bl=[];D.bw=[];D.vs=[];
+ for(let i=0;i<N;i++){if(i<19){D.bm[i]=c[i];D.bu[i]=1e18;D.bl[i]=-1e18;D.bw[i]=0;D.vs[i]=1e18;continue}
+  let s=0,q=0,vv=0;for(let k=i-19;k<=i;k++){s+=c[k];vv+=v[k]}const m=s/20;for(let k=i-19;k<=i;k++)q+=(c[k]-m)**2;const sd=Math.sqrt(q/20);
+  D.bm[i]=m;D.bu[i]=m+2*sd;D.bl[i]=m-2*sd;D.bw[i]=4*sd/m;D.vs[i]=vv/20}
+ D.rsi=rsiF(c);D.adx=adxF(h,l,c);D.te={100:ema(c,100),200:ema(c,200),400:ema(c,400)};
+ D.cu=[];D.cd=[];D.lu=[];D.ld=[];let a=-99,b=-99;
+ for(let i=0;i<N;i++){D.cu[i]=i>0&&D.mac[i]>D.sig[i]&&D.mac[i-1]<=D.sig[i-1];D.cd[i]=i>0&&D.mac[i]<D.sig[i]&&D.mac[i-1]>=D.sig[i-1];
+  if(D.cu[i])a=i;if(D.cd[i])b=i;D.lu[i]=a;D.ld[i]=b}}
+
+function getP(){return{te:+$('te').value,ax:+$('ax').value,bw:+$('bw').value,vo:+$('vo').value,rs:+$('rs').value,cd:+$('cd').value,R:+$('rr').value,L:+$('sl').value}}
+
+function sim(p,a,b){const {o,h,l,c,v}=D,risk=+$('risk').value,cost=+$('cost').value/100,fg=+$('fg').value,res=[];
+ let usedU=-1,usedD=-1,loss=0,skip=-1,i=Math.max(a,410);
+ while(i<b-1){let dir=0;
+  const lu=D.lu[i],ld=D.ld[i];
+  if(i>skip&&(!p.ax||D.adx[i]>=p.ax)&&(!p.bw||D.bw[i]>D.bw[i-5])&&(!p.vo||v[i]>D.vs[i])){
+   if(i-lu<=3&&lu>usedU&&D.hist[i]>0&&D.hist[i]>D.hist[i-1]&&c[i]>D.bm[i]&&(!p.te||c[i]>D.te[p.te][i])&&(!p.rs||D.rsi[i]<70)){
+    let t=false;for(let k=lu;k<=i;k++)if(h[k]>=D.bu[k])t=true;if(t){dir=1;usedU=lu}}
+   else if(i-ld<=3&&ld>usedD&&D.hist[i]<0&&D.hist[i]<D.hist[i-1]&&c[i]<D.bm[i]&&(!p.te||c[i]<D.te[p.te][i])&&(!p.rs||D.rsi[i]>30)){
+    let t=false;for(let k=ld;k<=i;k++)if(l[k]<=D.bl[k])t=true;if(t){dir=-1;usedD=ld}}}
+  if(!dir){i++;continue}
+  const en=o[i+1];let sl;
+  if(dir==1){sl=1e18;for(let k=i-p.L+1;k<=i;k++)sl=Math.min(sl,l[k])}else{sl=-1e18;for(let k=i-p.L+1;k<=i;k++)sl=Math.max(sl,h[k])}
+  const dist=Math.abs(en-sl);if(dist<=0||(dir==1&&sl>=en)||(dir==-1&&sl<=en)){i++;continue}
+  const cR=2*cost*en/dist;if(cR>fg){i++;continue}
+  const tp=en+dir*p.R*dist;let R=0,j=i+1;
+  for(;j<b;j++){
+   if(dir==1){if(l[j]<=sl){R=-1;break}if(h[j]>=tp){R=p.R;break}if(D.cd[j]){R=(c[j]-en)/dist;break}}
+   else{if(h[j]>=sl){R=-1;break}if(l[j]<=tp){R=p.R;break}if(D.cu[j]){R=(en-c[j])/dist;break}}}
+  if(j>=b){j=b-1;R=dir*(c[j]-en)/dist}
+  R-=cR;res.push({R,p:R*risk,f:cR*risk,t:D.t[j]});
+  if(R<0){loss++}else loss=0;if(p.cd&&loss>=2){skip=j+10;loss=0}
+  i=j}
+ return res}
+
+function stats(r){const bal=+$('bal').value;let gw=0,gl=0,w=0,eq=0,pk=0,dd=0,f=0;
+ r.forEach(x=>{f+=x.f;if(x.p>0){gw+=x.p;w++}else gl-=x.p;eq+=x.p;if(eq>pk)pk=eq;dd=Math.max(dd,(pk-eq)/(bal+pk))});
+ return{n:r.length,win:r.length?100*w/r.length:0,pf:gl?gw/gl:(gw?99:0),net:eq,dd:dd*100,fee:f}}
+
+function show(s,title){$('out').style.display='block';$('ot').textContent=title;
+ const f=(l,v,c)=>`<div>${l}<b class="${c||''}">${v}</b></div>`;
+ $('kp').innerHTML=f('ট্রেড',s.n)+f('Win rate',s.win.toFixed(1)+'%')+f('Profit factor',s.pf.toFixed(2),s.pf>1?'g':'r')+
+ f('Net profit','$'+s.net.toFixed(0),s.net>0?'g':'r')+f('Max drawdown',s.dd.toFixed(1)+'%')+f('ফি বাবদ খরচ','$'+s.fee.toFixed(0),'r')}
+
+$('go').onclick=()=>{if(!D)return st('আগে ডেটা লোড করো');const r=sim(getP(),0,D.c.length);
+ const m=Math.floor(r.length/2),A=stats(r.slice(0,m)),B=stats(r.slice(m));
+ show(stats(r),'পুরো সময়ের ফল (প্রথম অর্ধেক '+A.win.toFixed(1)+'% | শেষ অর্ধেক '+B.win.toFixed(1)+'% win rate)')};
+
+$('af').onclick=()=>{if(!D)return st('আগে ডেটা লোড করো');
+ const N=D.c.length,sp=Math.floor(N*2/3),C=[];
+ for(const te of[0,100,200])for(const ax of[0,20,25])for(const bw of[0,1])for(const vo of[0,1])for(const rs of[0,1])for(const cd of[0,1])for(const R of[0.5,0.75,1,1.5])for(const L of[3,5])C.push({te,ax,bw,vo,rs,cd,R,L});
+ const out=[];let k=0;$('afc').style.display='block';
+ (function step(){const e=Math.min(k+20,C.length);for(;k<e;k++){const p=C[k],a=stats(sim(p,0,sp)),b=stats(sim(p,sp,N));
+  if(a.n>=30&&b.n>=10&&a.pf>1.05&&b.pf>1.05)out.push({p,a,b,sc:Math.min(a.pf,b.pf)})}
+  $('afn').textContent=k+' / '+C.length;
+  if(k<C.length)return setTimeout(step,0);
+  out.sort((x,y)=>y.sc-x.sc);const top=out.slice(0,15);
+  $('aft').innerHTML=top.length?'<tr><th>Trend</th><th>ADX</th><th>BBw</th><th>Vol</th><th>RSI</th><th>Cd</th><th>R</th><th>SL</th><th>Train n/win/PF</th><th>Test n/win/PF</th></tr>'+
+  top.map((x,i)=>`<tr class="c" data-i="${i}"><td>${x.p.te||'-'}</td><td>${x.p.ax||'-'}</td><td>${x.p.bw?'✓':'-'}</td><td>${x.p.vo?'✓':'-'}</td><td>${x.p.rs?'✓':'-'}</td><td>${x.p.cd?'✓':'-'}</td><td>${x.p.R}</td><td>${x.p.L}</td>
+  <td>${x.a.n}/${x.a.win.toFixed(0)}%/${x.a.pf.toFixed(2)}</td><td>${x.b.n}/${x.b.win.toFixed(0)}%/${x.b.pf.toFixed(2)}</td></tr>`).join(''):'<tr><td>কোনো সেটিং train আর test দুটোতেই profit factor ১.০৫-এর উপরে যায়নি। ফি ধরে স্ক্যাল্পিংয়ে লাভ টেকেনি, এটাই সৎ ফল।</td></tr>';
+  document.querySelectorAll('#aft tr.c').forEach(tr=>tr.onclick=()=>{const p=top[+tr.dataset.i].p;
+   $('te').value=p.te;$('ax').value=p.ax;$('bw').value=p.bw;$('vo').value=p.vo;$('rs').value=p.rs;$('cd').value=p.cd;$('rr').value=p.R;$('sl').value=p.L;$('go').click()})})()};
+</script></body></html>
